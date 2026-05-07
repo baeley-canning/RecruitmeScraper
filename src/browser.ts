@@ -11,9 +11,9 @@ import { chromium, firefox } from "playwright-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import type { Browser, BrowserContext, Cookie } from "playwright";
 
+// Stealth plugin is Chromium-only — the user-agent-override evasion reads
+// browser.userAgent which doesn't exist on Firefox and throws on page creation.
 chromium.use(StealthPlugin());
-// Firefox stealth isn't needed but keeps the import clean
-firefox.use(StealthPlugin());
 
 let _chromiumBrowser: Browser | null = null;
 let _firefoxBrowser:  Browser | null = null;
