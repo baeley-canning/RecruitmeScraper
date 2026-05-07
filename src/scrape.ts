@@ -19,7 +19,7 @@ import type { ScrapeJob } from "./queue.js";
 
 // ── Timing config (seconds) ───────────────────────────────────────────────
 // Each value is a [min, max] range. Actual delay = random within range.
-const TIMING = {
+const TIMING: Record<string, [number, number]> = {
   afterPageLoad:      [60, 120],   // reading the header + about section
   scroll:             [15,  30],   // scrolling down the profile
   beforeDetailFetch:  [45,  90],   // pause before opening each sub-page
