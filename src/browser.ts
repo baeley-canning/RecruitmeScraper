@@ -94,14 +94,15 @@ export async function loginLinkedIn(email: string, password: string): Promise<vo
     const emailField    = page.locator("#username");
     const passwordField = page.locator("#password");
 
-    await emailField.waitFor({ state: "visible", timeout: 15_000 });
-    console.log("[scraper] login form ready");
+    // Wait for element to be attached to DOM — LinkedIn hides fields with CSS
+    // initially and reveals them via JS; waitFor("visible") times out because
+    // the element has display:none. fill() with force:true bypasses visibility.
+    await emailField.waitFor({ state: "attached", timeout: 15_000 });
+    console.log("[scraper] login form attached, filling credentials");
 
-    await emailField.click();
-    await emailField.type(email, { delay: 60 + Math.random() * 80 });
+    await emailField.fill(email, { force: true });
     await page.waitForTimeout(300 + Math.random() * 400);
-    await passwordField.click();
-    await passwordField.type(password, { delay: 50 + Math.random() * 70 });
+    await passwordField.fill(password, { force: true });
     await page.waitForTimeout(400 + Math.random() * 300);
 
     await page.click('[type="submit"]');
