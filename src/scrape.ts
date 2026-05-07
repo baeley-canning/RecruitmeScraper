@@ -19,11 +19,13 @@ import type { ScrapeJob } from "./queue.js";
 
 // ── Timing config (seconds) ───────────────────────────────────────────────
 // Each value is a [min, max] range. Actual delay = random within range.
+// Calibrated to look like a recruiter spending ~60-90 seconds per profile —
+// fast enough to be useful, varied enough to avoid bot fingerprinting.
 const TIMING: Record<string, [number, number]> = {
-  afterPageLoad:      [60, 120],   // reading the header + about section
-  scroll:             [15,  30],   // scrolling down the profile
-  beforeDetailFetch:  [45,  90],   // pause before opening each sub-page
-  afterDetailFetch:   [30,  60],   // pause after processing each sub-page
+  afterPageLoad:      [ 8,  18],   // reading the header + about section
+  scroll:             [ 3,   7],   // scrolling down the profile
+  beforeDetailFetch:  [ 6,  14],   // pause before opening each sub-page
+  afterDetailFetch:   [ 4,  10],   // pause after processing each sub-page
 };
 
 function randMs([min, max]: [number, number]): number {
@@ -113,9 +115,10 @@ export async function scrapeProfile(job: ScrapeJob): Promise<string> {
       timeout: 30_000,
     });
 
+    console.log(`[scraper] page loaded: ${page.url().slice(0, 120)}`);
     if (!res || !res.ok()) throw new Error(`LinkedIn returned HTTP ${res?.status() ?? "?"}`);
     if (page.url().includes("/authwall") || page.url().includes("/checkpoint") || page.url().includes("/login")) {
-      throw new Error("LinkedIn requires login — session may have expired");
+      throw new Error(`LinkedIn requires login — session expired. Landed on: ${page.url()}`);
     }
 
     // Human pause — reading the header and about section
@@ -179,13 +182,21 @@ export async function postResultToApp(job: ScrapeJob, profileText: string): Prom
 
 export async function postErrorToApp(job: ScrapeJob, error: string): Promise<void> {
   const url = `${job.callbackUrl.replace(/\/$/, "")}/api/extension/fetch-session/error`;
-  await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Basic ${btoa(`scraper:${job.apiKey}`)}`,
-    },
-    body: JSON.stringify({ sessionId: job.sessionId, error }),
-    signal: AbortSignal.timeout(15_000),
-  }).catch(() => {});
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Basic ${btoa(`scraper:${job.apiKey}`)}`,
+      },
+      body: JSON.stringify({ sessionId: job.sessionId, error }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.error(`[scraper] error callback failed: ${res.status} ${body.slice(0, 200)}`);
+    }
+  } catch (err) {
+    console.error("[scraper] error callback threw:", err instanceof Error ? err.message : err);
+  }
 }
