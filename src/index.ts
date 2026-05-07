@@ -55,6 +55,7 @@ async function initSession(): Promise<void> {
       name: "li_at", value: liAt,
       domain: ".linkedin.com", path: "/",
       httpOnly: true, secure: true, sameSite: "None",
+      expires: -1,
     }]);
     console.log("[scraper] session loaded from LINKEDIN_SESSION_COOKIE");
     return;
