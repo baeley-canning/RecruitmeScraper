@@ -48,23 +48,41 @@ setProcessor(async (job: ScrapeJob) => {
 });
 
 async function initSession(): Promise<void> {
+  // Option 1: single li_at session cookie value — simplest, copy from DevTools
+  const liAt = process.env.LINKEDIN_SESSION_COOKIE?.trim();
+  if (liAt) {
+    setSessionCookies([{
+      name: "li_at", value: liAt,
+      domain: ".linkedin.com", path: "/",
+      httpOnly: true, secure: true, sameSite: "None",
+    }]);
+    console.log("[scraper] session loaded from LINKEDIN_SESSION_COOKIE");
+    return;
+  }
+
+  // Option 2: full JSON cookie export (e.g. from Cookie-Editor extension)
   const cookieJson = process.env.LINKEDIN_COOKIES;
   if (cookieJson) {
     try {
       setSessionCookies(JSON.parse(cookieJson));
-      console.log("[scraper] session cookies loaded");
+      console.log("[scraper] session loaded from LINKEDIN_COOKIES");
       return;
     } catch { console.warn("[scraper] LINKEDIN_COOKIES was not valid JSON"); }
   }
+
+  // Option 3: email + password login (may hit LinkedIn verification challenge)
   const email = process.env.LINKEDIN_EMAIL;
   const pass  = process.env.LINKEDIN_PASSWORD;
   if (email && pass) {
     console.log("[scraper] logging into LinkedIn…");
     await loginLinkedIn(email, pass).catch((e: Error) => {
       console.error("[scraper] login failed:", e.message);
+      console.error("[scraper] → Set LINKEDIN_SESSION_COOKIE in Railway Variables instead.");
+      console.error("[scraper] → Get it from: DevTools → Application → Cookies → linkedin.com → li_at");
     });
   } else {
-    console.warn("[scraper] no LinkedIn credentials — scrapes will fail unless LINKEDIN_COOKIES is set");
+    console.warn("[scraper] no credentials — set LINKEDIN_SESSION_COOKIE in Railway Variables");
+    console.warn("[scraper] → DevTools → Application → Cookies → linkedin.com → copy 'li_at' value");
   }
 }
 
