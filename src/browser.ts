@@ -87,25 +87,67 @@ export async function loginLinkedIn(email: string, password: string): Promise<vo
 
     await dismissConsentBanner(page);
 
-    // Use Playwright's semantic locators — resilient to ID/name/attribute changes.
-    // getByPlaceholder matches on visible placeholder text which LinkedIn keeps stable.
-    const emailField = page.getByPlaceholder(/email or phone/i).first();
-    try {
-      await emailField.waitFor({ state: "visible", timeout: 15_000 });
-    } catch {
-      const title = await page.title().catch(() => "unknown");
-      const text  = await page.evaluate(() => document.body?.innerText?.slice(0, 2000) ?? "").catch(() => "");
-      console.error(`[scraper] email field not found. URL=${page.url()} TITLE="${title}"\nPAGE_TEXT:\n${text}`);
-      throw new Error(`LinkedIn login form not rendered — URL: ${page.url()}`);
+    // Dump all iframes and all inputs so we can see the exact DOM structure.
+    const frameUrls = page.frames().map(f => f.url());
+    console.log(`[scraper] frames on page: ${JSON.stringify(frameUrls)}`);
+    const inputAttrs = await page.evaluate(() =>
+      Array.from(document.querySelectorAll("input")).map(el => ({
+        id: el.id, name: el.name, type: el.type,
+        placeholder: el.placeholder, autocomplete: el.getAttribute("autocomplete"),
+        ariaLabel: el.getAttribute("aria-label"),
+      }))
+    ).catch(() => []);
+    console.log(`[scraper] inputs on main frame: ${JSON.stringify(inputAttrs)}`);
+
+    // Try main frame first, then any iframes.
+    type LocatorLike = { click(): Promise<void>; type(text: string, opts: object): Promise<void>; waitFor(opts: object): Promise<void> };
+    let emailField: LocatorLike | null = null;
+    let passwordField: LocatorLike | null = null;
+
+    // Main frame attempts
+    const mainCandidates = [
+      page.getByPlaceholder(/email or phone/i).first(),
+      page.getByLabel(/email or phone/i).first(),
+      page.locator('#username').first(),
+      page.locator('input[name="session_key"]').first(),
+      page.locator('input[autocomplete="username"]').first(),
+      page.locator('input[type="text"]').first(),
+    ];
+    for (const loc of mainCandidates) {
+      if (await loc.isVisible({ timeout: 1500 }).catch(() => false)) {
+        emailField = loc;
+        console.log("[scraper] found email field on main frame");
+        break;
+      }
     }
-    console.log("[scraper] found email field via placeholder");
+
+    // If not on main frame, check iframes
+    if (!emailField) {
+      for (const frame of page.frames().slice(1)) {
+        const loc = frame.getByPlaceholder(/email or phone/i).first();
+        if (await loc.isVisible({ timeout: 2000 }).catch(() => false)) {
+          emailField   = loc;
+          passwordField = frame.getByPlaceholder(/password/i).first();
+          console.log(`[scraper] found email field in iframe: ${frame.url()}`);
+          break;
+        }
+      }
+    }
+
+    if (!emailField) {
+      const text = await page.evaluate(() => document.body?.innerText?.slice(0, 3000) ?? "").catch(() => "");
+      console.error(`[scraper] email field not found anywhere.\nBODY:\n${text}`);
+      throw new Error(`LinkedIn login form not found in main frame or iframes — URL: ${page.url()}`);
+    }
+
+    if (!passwordField) {
+      passwordField = page.getByPlaceholder(/password/i).first();
+    }
 
     // Human-paced typing
     await emailField.click();
     await emailField.type(email, { delay: 60 + Math.random() * 80 });
     await page.waitForTimeout(300 + Math.random() * 400);
-
-    const passwordField = page.getByPlaceholder(/password/i).first();
     await passwordField.click();
     await passwordField.type(password, { delay: 50 + Math.random() * 70 });
     await page.waitForTimeout(400 + Math.random() * 300);
