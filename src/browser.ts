@@ -87,15 +87,38 @@ export async function loginLinkedIn(email: string, password: string): Promise<vo
 
     await dismissConsentBanner(page);
 
-    // Wait for the username field — gives React time to mount the form.
-    await page.waitForSelector("#username", { timeout: 20_000 });
+    // LinkedIn has used multiple selectors over time — try all of them.
+    const usernameSels = [
+      "#username",
+      'input[name="session_key"]',
+      'input[autocomplete="username"]',
+      'input[type="email"]',
+      'input[id*="email"]',
+    ];
+    let usernameSel: string | null = null;
+    for (const sel of usernameSels) {
+      const visible = await page.locator(sel).first().isVisible({ timeout: 3000 }).catch(() => false);
+      if (visible) { usernameSel = sel; break; }
+    }
+    if (!usernameSel) {
+      // Dump page state so Railway logs show what LinkedIn is actually serving.
+      const title = await page.title().catch(() => "unknown");
+      const text  = await page.evaluate(() => document.body?.innerText?.slice(0, 2000) ?? "").catch(() => "");
+      const url   = page.url();
+      console.error(`[scraper] login form not found. URL=${url} TITLE="${title}"\nPAGE_TEXT:\n${text}`);
+      throw new Error(`LinkedIn login form not rendered — check Railway logs for page dump. URL: ${url}`);
+    }
+    console.log(`[scraper] found username field: ${usernameSel}`);
 
     // Human-paced typing so it doesn't look like an instant programmatic fill.
-    await page.click("#username");
-    await page.type("#username", email, { delay: 60 + Math.random() * 80 });
+    await page.click(usernameSel);
+    await page.type(usernameSel, email, { delay: 60 + Math.random() * 80 });
     await page.waitForTimeout(300 + Math.random() * 400);
-    await page.click("#password");
-    await page.type("#password", password, { delay: 50 + Math.random() * 70 });
+    const passwordSel = await page.locator("#password").isVisible({ timeout: 3000 }).catch(() => false)
+      ? "#password"
+      : 'input[name="session_password"]';
+    await page.click(passwordSel);
+    await page.type(passwordSel, password, { delay: 50 + Math.random() * 70 });
     await page.waitForTimeout(400 + Math.random() * 300);
 
     await page.click('[type="submit"]');
