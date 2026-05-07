@@ -102,10 +102,21 @@ function json(res: http.ServerResponse, status: number, data: unknown): void {
   res.end(body);
 }
 
+// Catch unhandled rejections so the process never silently dies
+process.on("unhandledRejection", (reason) => {
+  console.error("[scraper] unhandledRejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[scraper] uncaughtException:", err);
+});
+
 const server = http.createServer(async (req, res) => {
+  console.log(`[scraper] ${req.method} ${req.url}`);
+  try {
   // Auth — every request except /health
   if (req.url !== "/health") {
     if (!API_KEY || req.headers["x-scraper-api-key"] !== API_KEY) {
+      console.warn(`[scraper] auth failed — key mismatch on ${req.url}`);
       json(res, 401, { error: "Unauthorized" });
       return;
     }
@@ -153,6 +164,10 @@ const server = http.createServer(async (req, res) => {
   }
 
   json(res, 404, { error: "Not found" });
+  } catch (err) {
+    console.error("[scraper] unhandled request error:", err);
+    if (!res.headersSent) json(res, 500, { error: "Internal server error" });
+  }
 });
 
 server.listen(PORT, async () => {
