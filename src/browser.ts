@@ -7,22 +7,22 @@
  * login cookies are shared by injecting them at context-creation time.
  */
 
-import { chromium } from "playwright-extra";
+import { chromium, firefox } from "playwright-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import type { Browser, BrowserContext, Cookie } from "playwright";
 
 chromium.use(StealthPlugin());
+// Firefox stealth isn't needed but keeps the import clean
+firefox.use(StealthPlugin());
 
-// Playwright 1.59.1 ships with Chromium 136 — user agent must match.
-const USER_AGENT =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
+let _chromiumBrowser: Browser | null = null;
+let _firefoxBrowser:  Browser | null = null;
+let _sessionCookies:  Cookie[] = [];
 
-let _browser: Browser | null = null;
-let _sessionCookies: Cookie[] = [];
-
-async function getBrowser(): Promise<Browser> {
-  if (_browser && _browser.isConnected()) return _browser;
-  _browser = await chromium.launch({
+// Chromium — used for profile scraping after login cookies are established.
+async function getChromiumBrowser(): Promise<Browser> {
+  if (_chromiumBrowser && _chromiumBrowser.isConnected()) return _chromiumBrowser;
+  _chromiumBrowser = await chromium.launch({
     headless: true,
     args: [
       "--no-sandbox",
@@ -32,13 +32,22 @@ async function getBrowser(): Promise<Browser> {
       "--window-size=1280,900",
     ],
   });
-  _browser.on("disconnected", () => { _browser = null; });
-  return _browser;
+  _chromiumBrowser.on("disconnected", () => { _chromiumBrowser = null; });
+  return _chromiumBrowser;
 }
 
-function makeContextOptions() {
+// Firefox — used for the login step only.
+// LinkedIn's bot detection is far less aggressive against Firefox than Chromium.
+async function getFirefoxBrowser(): Promise<Browser> {
+  if (_firefoxBrowser && _firefoxBrowser.isConnected()) return _firefoxBrowser;
+  _firefoxBrowser = await firefox.launch({ headless: true });
+  _firefoxBrowser.on("disconnected", () => { _firefoxBrowser = null; });
+  return _firefoxBrowser;
+}
+
+function makeChromiumContextOptions() {
   return {
-    userAgent: USER_AGENT,
+    userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
     viewport:  { width: 1280, height: 900 },
     locale:    "en-NZ",
     timezoneId: "Pacific/Auckland",
@@ -46,10 +55,21 @@ function makeContextOptions() {
   };
 }
 
+function makeFirefoxContextOptions() {
+  return {
+    viewport: { width: 1280, height: 900 },
+    locale:   "en-NZ",
+    timezoneId: "Pacific/Auckland",
+    extraHTTPHeaders: { "Accept-Language": "en-NZ,en;q=0.9" },
+  };
+}
+
 // Called once at startup to log into LinkedIn and persist session cookies.
+// Uses Firefox — LinkedIn's headless-browser detection is much weaker against
+// Firefox than against Chromium.
 export async function loginLinkedIn(email: string, password: string): Promise<void> {
-  const browser = await getBrowser();
-  const ctx  = await browser.newContext(makeContextOptions());
+  const browser = await getFirefoxBrowser();
+  const ctx  = await browser.newContext(makeFirefoxContextOptions());
   const page = await ctx.newPage();
 
   try {
@@ -160,15 +180,18 @@ export function setSessionCookies(cookies: Cookie[]): void {
   console.log(`[scraper] ${cookies.length} session cookies loaded`);
 }
 
-// Create a fresh isolated context with the shared session cookies injected.
+// Create a fresh isolated Chromium context with the shared session cookies injected.
+// Chromium is used for profile scraping since the login cookies work cross-browser.
 export async function newContext(): Promise<BrowserContext> {
-  const browser = await getBrowser();
-  const ctx     = await browser.newContext(makeContextOptions());
+  const browser = await getChromiumBrowser();
+  const ctx     = await browser.newContext(makeChromiumContextOptions());
   if (_sessionCookies.length > 0) await ctx.addCookies(_sessionCookies);
   return ctx;
 }
 
 export async function closeBrowser(): Promise<void> {
-  await _browser?.close();
-  _browser = null;
+  await _chromiumBrowser?.close();
+  _chromiumBrowser = null;
+  await _firefoxBrowser?.close();
+  _firefoxBrowser = null;
 }
