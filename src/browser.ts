@@ -46,19 +46,24 @@ export async function loginLinkedIn(email: string, password: string): Promise<vo
   const page = await ctx.newPage();
 
   try {
-    await page.goto("https://www.linkedin.com/login", { waitUntil: "domcontentloaded" });
+    console.log("[scraper] navigating to LinkedIn login...");
+    await page.goto("https://www.linkedin.com/login", { waitUntil: "networkidle", timeout: 30_000 });
+    console.log(`[scraper] login page loaded: ${page.url()}`);
+
+    // LinkedIn sometimes shows a cookie consent or challenge before the form —
+    // wait explicitly for the username field rather than relying on page load event.
+    await page.waitForSelector("#username", { timeout: 20_000 });
     await page.fill("#username", email);
     await page.fill("#password", password);
     await page.click('[type="submit"]');
-    // Wait for the feed to confirm login, up to 15s
-    await page.waitForURL(/linkedin\.com\/feed/, { timeout: 15_000 }).catch(() => {});
+    // Wait for feed — up to 25s (LinkedIn can be slow post-login)
+    await page.waitForURL(/linkedin\.com\/feed/, { timeout: 25_000 }).catch(() => {});
     if (!page.url().includes("/feed")) {
-      // Check for checkpoint (email verification, CAPTCHA, etc.)
       const url = page.url();
-      throw new Error(`LinkedIn login did not reach feed — landed on ${url}. Manual verification may be required.`);
+      throw new Error(`LinkedIn login did not reach feed — landed on: ${url}. Account may be locked, CAPTCHA required, or credentials wrong.`);
     }
     _sessionCookies = await ctx.cookies();
-    console.log("[scraper] LinkedIn login successful, session cookies saved");
+    console.log(`[scraper] LinkedIn login successful — ${_sessionCookies.length} cookies saved`);
   } finally {
     await ctx.close();
   }
