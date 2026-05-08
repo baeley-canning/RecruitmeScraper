@@ -19,13 +19,13 @@ import type { ScrapeJob } from "./queue.js";
 
 // ── Timing config (seconds) ───────────────────────────────────────────────
 // Each value is a [min, max] range. Actual delay = random within range.
-// Calibrated to look like a recruiter spending ~60-90 seconds per profile —
-// fast enough to be useful, varied enough to avoid bot fingerprinting.
+// Total per profile: ~3-5 minutes. The key signal LinkedIn detects is
+// rapid link-to-link navigation — beforeDetailFetch is the most important.
 const TIMING: Record<string, [number, number]> = {
-  afterPageLoad:      [ 8,  18],   // reading the header + about section
-  scroll:             [ 3,   7],   // scrolling down the profile
-  beforeDetailFetch:  [ 6,  14],   // pause before opening each sub-page
-  afterDetailFetch:   [ 4,  10],   // pause after processing each sub-page
+  afterPageLoad:      [15,  30],   // reading the header + about section
+  scroll:             [ 5,  10],   // scrolling down the profile
+  beforeDetailFetch:  [20,  45],   // pause before opening each sub-page (key: must feel human)
+  afterDetailFetch:   [12,  25],   // reading the section before moving on
 };
 
 function randMs([min, max]: [number, number]): number {
@@ -83,19 +83,19 @@ async function fetchSection(
   section: string,
 ): Promise<string> {
   const url = baseUrl.replace(/\/?$/, `/details/${section}/`);
+  // Human pause before navigating — this is the main detection signal.
   await sleep(randMs(TIMING.beforeDetailFetch));
   await randomMouseMove(page);
+  await humanScroll(page);
   try {
     const res = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 25_000 });
     if (!res || !res.ok()) return "";
-    // Verify we actually landed on the section, not a redirect
     if (!page.url().includes(`/details/${section}`)) return "";
     await sleep(randMs(TIMING.afterDetailFetch));
     await randomMouseMove(page);
-    const text = await extractMainText(page);
-    // Navigate back to base profile before next section
-    await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => {});
-    return text;
+    return await extractMainText(page);
+    // No bounce-back — navigate directly to next section from here.
+    // Bouncing back to the base profile every time is an unnatural pattern.
   } catch {
     return "";
   }
