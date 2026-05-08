@@ -34,31 +34,44 @@ export async function loadProxies(): Promise<void> {
       const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
       const baseCreds = singleUrl ? (() => { try { return new URL(singleUrl); } catch { return null; } })() : null;
       console.log(`[scraper] proxy list raw sample: ${lines.slice(0, 2).join(" | ")}`);
+      // Strict IP:port validator — anything that doesn't match is rejected.
+      const HOST_RE = /^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{2,5})$/;
+      const buildProxy = (host: string, username?: string, password?: string) => {
+        if (!HOST_RE.test(host)) return null;
+        return { server: `http://${host}`, username, password };
+      };
+
       _proxyList = lines.map(line => {
-        // Format 1: full URL  http://user:pass@ip:port
-        if (line.startsWith("http://") || line.startsWith("https://")) {
+        // Format 1: http://user:pass@ip:port
+        if (/^https?:\/\//i.test(line)) {
           try {
             const u = new URL(line);
-            return { server: `http://${u.host}`, username: u.username || undefined, password: u.password || undefined };
+            return buildProxy(u.host, u.username || undefined, u.password || undefined);
           } catch { return null; }
         }
-        // Format 2: ip:port:user:pass
-        const parts = line.split(":");
-        if (parts.length === 4) {
-          return { server: `http://${parts[0]}:${parts[1]}`, username: parts[2], password: parts[3] };
-        }
-        // Format 3: user:pass@ip:port
+        // Format 2: user:pass@ip:port
         if (line.includes("@")) {
           const [auth, host] = line.split("@");
           const [username, password] = auth.split(":");
-          return { server: `http://${host}`, username, password };
+          return buildProxy(host, username, password);
         }
-        // Format 4: ip:port only — use creds from PROXY_URL
+        const parts = line.split(":");
+        // Format 3: ip:port:user:pass
+        if (parts.length === 4) {
+          return buildProxy(`${parts[0]}:${parts[1]}`, parts[2], parts[3]);
+        }
+        // Format 4: ip:port only
         if (parts.length === 2) {
-          return { server: `http://${line}`, username: baseCreds?.username, password: baseCreds?.password };
+          return buildProxy(line, baseCreds?.username, baseCreds?.password);
         }
         return null;
       }).filter((p): p is NonNullable<typeof p> => p !== null);
+
+      if (_proxyList.length > 0) {
+        console.log(`[scraper] first proxy: ${_proxyList[0].server} (auth: ${_proxyList[0].username ? "yes" : "no"})`);
+      } else {
+        console.error("[scraper] PROXY_LIST_URL fetched but no valid proxies parsed. First raw line:", lines[0]?.slice(0, 100));
+      }
       console.log(`[scraper] ${_proxyList.length} proxies loaded from PROXY_LIST_URL`);
     } catch (err) {
       console.error("[scraper] failed to fetch proxy list:", err instanceof Error ? err.message : err);
