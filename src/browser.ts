@@ -21,11 +21,63 @@ let _sessionCookies: Cookie[] = [];
 let _proxyList: Array<{ server: string; username?: string; password?: string }> = [];
 let _proxyIndex = 0;
 
-// Fetch proxy list from Webshare download URL.
-// Format returned: "ip:port:user:pass" per line.
+// Webshare API response shape for /api/v2/proxy/list/
+type WebshareProxy = {
+  username: string;
+  password: string;
+  proxy_address: string;
+  port: number;
+  valid?: boolean;
+};
+type WebshareListResponse = {
+  count: number;
+  next: string | null;
+  results: WebshareProxy[];
+};
+
+// Pull proxies from Webshare. Three sources, in priority order:
+//   1. WEBSHARE_API_KEY  — official API, structured JSON, paginated, won't silently expire
+//   2. PROXY_LIST_URL    — download-token URL (legacy; token can be revoked)
+//   3. PROXY_URL         — single proxy
 export async function loadProxies(): Promise<void> {
+  const apiKey  = process.env.WEBSHARE_API_KEY?.trim();
   const listUrl = process.env.PROXY_LIST_URL?.trim();
   const singleUrl = process.env.PROXY_URL?.trim();
+
+  if (apiKey) {
+    try {
+      const collected: WebshareProxy[] = [];
+      let url: string | null = "https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=100";
+      while (url) {
+        const res: Response = await fetch(url, {
+          headers: { Authorization: `Token ${apiKey}` },
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          console.error(`[scraper] Webshare API ${res.status}: ${body.slice(0, 200)}`);
+          break;
+        }
+        const data = (await res.json()) as WebshareListResponse;
+        collected.push(...(data.results ?? []));
+        url = data.next;
+      }
+      _proxyList = collected
+        .filter(p => p.valid !== false && p.proxy_address && p.port)
+        .map(p => ({
+          server: `http://${p.proxy_address}:${p.port}`,
+          username: p.username,
+          password: p.password,
+        }));
+      if (_proxyList.length > 0) {
+        console.log(`[scraper] first proxy: ${_proxyList[0].server} (auth: yes)`);
+      }
+      console.log(`[scraper] ${_proxyList.length} proxies loaded from WEBSHARE_API_KEY`);
+      return;
+    } catch (err) {
+      console.error("[scraper] Webshare API fetch failed:", err instanceof Error ? err.message : err);
+    }
+  }
 
   if (listUrl) {
     try {
