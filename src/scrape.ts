@@ -108,15 +108,11 @@ export async function scrapeProfile(job: ScrapeJob): Promise<string> {
   // Set realistic browser headers on every request — missing Accept headers
   // are a strong bot signal that triggers LinkedIn's HTTP 999 block.
   await page.setExtraHTTPHeaders({
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-NZ,en;q=0.9",
     "Accept-Encoding": "gzip, deflate, br",
     "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Cache-Control": "max-age=0",
+    // Safari doesn't send Sec-Fetch-* headers — omitting them matches WebKit behaviour
   });
 
   // Only block tracking pixels — keep CSS/fonts/images so the page looks

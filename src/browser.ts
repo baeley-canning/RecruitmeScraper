@@ -6,43 +6,21 @@
  * would OOM-kill the container on Railway's 512MB instances.
  */
 
-import { chromium } from "playwright-extra";
-import StealthPlugin from "puppeteer-extra-plugin-stealth";
+import { webkit } from "playwright";
 import type { Browser, BrowserContext, Cookie } from "playwright";
 
-chromium.use(StealthPlugin());
-
+// WebKit (Safari engine) — LinkedIn's 999 bot detection is heavily Chrome-focused.
+// WebKit has a genuinely different TLS fingerprint and browser API surface that
+// LinkedIn's detectors don't flag as aggressively.
 const USER_AGENT =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15";
 
 let _browser: Browser | null = null;
 let _sessionCookies: Cookie[] = [];
 
 async function getBrowser(): Promise<Browser> {
   if (_browser && _browser.isConnected()) return _browser;
-  _browser = await chromium.launch({
-    headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-blink-features=AutomationControlled",
-      "--disable-dev-shm-usage",
-      // Memory reduction flags for constrained Railway containers
-      "--disable-gpu",
-      "--disable-software-rasterizer",
-      "--disable-extensions",
-      "--disable-background-networking",
-      "--disable-default-apps",
-      "--disable-sync",
-      "--disable-translate",
-      "--hide-scrollbars",
-      "--mute-audio",
-      "--no-first-run",
-      "--disable-features=TranslateUI,BlinkGenPropertyTrees",
-      "--js-flags=--max-old-space-size=256",
-      "--window-size=1280,900",
-    ],
-  });
+  _browser = await webkit.launch({ headless: true });
   _browser.on("disconnected", () => { _browser = null; });
   return _browser;
 }
@@ -60,7 +38,7 @@ function makeContextOptions() {
 // Login is now bypassed entirely — LINKEDIN_SESSION_COOKIE is used instead.
 // Kept here in case fallback login is ever needed.
 export async function loginLinkedIn(email: string, password: string): Promise<void> {
-  const browser = await getBrowser();
+  const browser = await webkit.launch({ headless: true });
   const ctx  = await browser.newContext(makeContextOptions());
   const page = await ctx.newPage();
 
