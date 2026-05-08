@@ -105,9 +105,24 @@ export async function scrapeProfile(job: ScrapeJob): Promise<string> {
   const ctx = await newContext();
   const page = await ctx.newPage();
 
-  // Block heavy assets — speeds up loads and reduces fingerprint noise
-  await page.route("**/*.{png,jpg,jpeg,gif,webp,woff,woff2,ttf}", (r) => r.abort());
+  // Set realistic browser headers on every request — missing Accept headers
+  // are a strong bot signal that triggers LinkedIn's HTTP 999 block.
+  await page.setExtraHTTPHeaders({
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-NZ,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Cache-Control": "max-age=0",
+  });
+
+  // Only block tracking pixels — keep CSS/fonts/images so the page looks
+  // like a real browser visit. Blocking too many resources is itself a bot signal.
   await page.route("**/li/track*", (r) => r.abort());
+  await page.route("**/*ads*", (r) => r.abort());
 
   try {
     const res = await page.goto(job.linkedinUrl, {
@@ -115,7 +130,10 @@ export async function scrapeProfile(job: ScrapeJob): Promise<string> {
       timeout: 30_000,
     });
 
-    console.log(`[scraper] page loaded: ${page.url().slice(0, 120)}`);
+    console.log(`[scraper] page loaded: ${page.url().slice(0, 120)} (status ${res?.status()})`);
+    if (res?.status() === 999) {
+      throw new Error("LinkedIn returned 999 — bot detection triggered. Try refreshing LINKEDIN_COOKIES from your browser.");
+    }
     if (!res || !res.ok()) throw new Error(`LinkedIn returned HTTP ${res?.status() ?? "?"}`);
     if (page.url().includes("/authwall") || page.url().includes("/checkpoint") || page.url().includes("/login")) {
       throw new Error(`LinkedIn requires login — session expired. Landed on: ${page.url()}`);
