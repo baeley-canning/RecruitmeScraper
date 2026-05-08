@@ -65,7 +65,24 @@ async function initSession(): Promise<void> {
   const cookieJson = process.env.LINKEDIN_COOKIES;
   if (cookieJson) {
     try {
-      setSessionCookies(JSON.parse(cookieJson));
+      // Cookie-Editor exports Chrome's internal format which differs from Playwright's:
+      //   sameSite: "no_restriction" → "None", null → "Lax", "lax" → "Lax", "strict" → "Strict"
+      //   expirationDate (float) → expires (int)
+      //   hostOnly, session, storeId — Playwright doesn't use these, strip them
+      const raw = JSON.parse(cookieJson) as Record<string, unknown>[];
+      const sameSiteMap: Record<string, "None" | "Lax" | "Strict"> = {
+        no_restriction: "None", none: "None",
+        lax: "Lax",
+        strict: "Strict",
+      };
+      const sanitized = raw.map((c) => {
+        const raw_ss = (c.sameSite as string | null)?.toLowerCase() ?? "";
+        const sameSite: "None" | "Lax" | "Strict" = sameSiteMap[raw_ss] ?? "Lax";
+        const expires = c.expires ?? (c.expirationDate ? Math.floor(c.expirationDate as number) : -1);
+        return { name: c.name, value: c.value, domain: c.domain, path: c.path ?? "/",
+          httpOnly: c.httpOnly ?? false, secure: c.secure ?? true, sameSite, expires };
+      });
+      setSessionCookies(sanitized as Parameters<typeof setSessionCookies>[0]);
       console.log("[scraper] session loaded from LINKEDIN_COOKIES");
       return;
     } catch { console.warn("[scraper] LINKEDIN_COOKIES was not valid JSON"); }
