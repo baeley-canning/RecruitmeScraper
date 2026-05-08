@@ -141,11 +141,29 @@ export async function loadProxies(): Promise<void> {
   }
 }
 
+// Proxies that have returned 999 this session — skipped on subsequent attempts.
+const _burnedProxies = new Set<string>();
+
+export function markProxyBurned(server: string): void {
+  _burnedProxies.add(server);
+  console.warn(`[scraper] proxy burned: ${server} (${_burnedProxies.size}/${_proxyList.length} burned)`);
+  // If everything is burned, reset — better to retry old proxies than have nothing.
+  if (_burnedProxies.size >= _proxyList.length && _proxyList.length > 0) {
+    console.warn("[scraper] all proxies burned — resetting burn list");
+    _burnedProxies.clear();
+  }
+}
+
 function nextProxy() {
   if (_proxyList.length === 0) return undefined;
-  const proxy = _proxyList[_proxyIndex % _proxyList.length];
-  _proxyIndex++;
-  return proxy;
+  for (let i = 0; i < _proxyList.length; i++) {
+    const proxy = _proxyList[(_proxyIndex + i) % _proxyList.length];
+    if (!_burnedProxies.has(proxy.server)) {
+      _proxyIndex = (_proxyIndex + i + 1) % _proxyList.length;
+      return proxy;
+    }
+  }
+  return _proxyList[_proxyIndex++ % _proxyList.length];
 }
 
 async function getBrowser(): Promise<Browser> {
@@ -245,13 +263,13 @@ export function setSessionCookies(cookies: Cookie[]): void {
   console.log(`[scraper] ${cookies.length} session cookies loaded`);
 }
 
-export async function newContext(): Promise<BrowserContext> {
+export async function newContext(): Promise<{ ctx: BrowserContext; proxyServer?: string }> {
   const browser = await getBrowser();
   const proxy = nextProxy();
   if (proxy) console.log(`[scraper] using proxy: ${proxy.server}`);
   const ctx = await browser.newContext({ ...makeContextOptions(), proxy });
   if (_sessionCookies.length > 0) await ctx.addCookies(_sessionCookies);
-  return ctx;
+  return { ctx, proxyServer: proxy?.server };
 }
 
 export async function closeBrowser(): Promise<void> {

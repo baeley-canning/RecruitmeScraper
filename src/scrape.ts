@@ -13,9 +13,11 @@
  * already polls. No changes needed on the app side.
  */
 
-import { newContext } from "./browser.js";
-import type { Page } from "playwright";
+import { newContext, markProxyBurned } from "./browser.js";
+import type { BrowserContext, Page } from "playwright";
 import type { ScrapeJob } from "./queue.js";
+
+const MAX_PROXY_ATTEMPTS = 5;
 
 // ── Timing config (seconds) ───────────────────────────────────────────────
 // Each value is a [min, max] range. Actual delay = random within range.
@@ -101,39 +103,60 @@ async function fetchSection(
   }
 }
 
-export async function scrapeProfile(job: ScrapeJob): Promise<string> {
-  const ctx = await newContext();
-  const page = await ctx.newPage();
-
-  // Set realistic browser headers on every request — missing Accept headers
-  // are a strong bot signal that triggers LinkedIn's HTTP 999 block.
-  await page.setExtraHTTPHeaders({
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-NZ,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Upgrade-Insecure-Requests": "1",
-    // Safari doesn't send Sec-Fetch-* headers — omitting them matches WebKit behaviour
-  });
-
-  // Only block tracking pixels — keep CSS/fonts/images so the page looks
-  // like a real browser visit. Blocking too many resources is itself a bot signal.
-  await page.route("**/li/track*", (r) => r.abort());
-  await page.route("**/*ads*", (r) => r.abort());
-
-  try {
-    const res = await page.goto(job.linkedinUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: 30_000,
+// Open a context, navigate to the profile, and return the live ctx+page on
+// the first proxy that doesn't 999. Burns each failing proxy and retries.
+async function openProfileWithRetry(url: string): Promise<{ ctx: BrowserContext; page: Page }> {
+  let lastErr = "no attempts made";
+  for (let attempt = 1; attempt <= MAX_PROXY_ATTEMPTS; attempt++) {
+    const { ctx, proxyServer } = await newContext();
+    const page = await ctx.newPage();
+    await page.setExtraHTTPHeaders({
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-NZ,en;q=0.9",
+      "Accept-Encoding": "gzip, deflate, br",
+      "Upgrade-Insecure-Requests": "1",
     });
+    await page.route("**/li/track*", (r) => r.abort());
+    await page.route("**/*ads*", (r) => r.abort());
 
-    console.log(`[scraper] page loaded: ${page.url().slice(0, 120)} (status ${res?.status()})`);
-    if (res?.status() === 999) {
-      throw new Error("LinkedIn returned 999 — bot detection. Update LINKEDIN_COOKIES in Railway with fresh cookies from your browser.");
+    try {
+      const res = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      const status = res?.status();
+      console.log(`[scraper] attempt ${attempt} via ${proxyServer ?? "direct"}: ${page.url().slice(0, 120)} (status ${status})`);
+
+      if (status === 999) {
+        if (proxyServer) markProxyBurned(proxyServer);
+        await ctx.close().catch(() => {});
+        lastErr = `999 on attempt ${attempt}`;
+        continue;
+      }
+      if (!res || !res.ok()) {
+        await ctx.close().catch(() => {});
+        lastErr = `HTTP ${status ?? "?"} on attempt ${attempt}`;
+        continue;
+      }
+      const finalUrl = page.url();
+      if (finalUrl.includes("/authwall") || finalUrl.includes("/checkpoint") || finalUrl.includes("/login")) {
+        await ctx.close().catch(() => {});
+        throw new Error(`LinkedIn requires login — session expired. Landed on: ${finalUrl}`);
+      }
+      return { ctx, page };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Re-throw auth errors immediately — retrying won't help if cookies are dead.
+      if (msg.includes("session expired")) throw err;
+      console.warn(`[scraper] attempt ${attempt} via ${proxyServer ?? "direct"} threw: ${msg}`);
+      if (proxyServer) markProxyBurned(proxyServer);
+      await ctx.close().catch(() => {});
+      lastErr = msg;
     }
-    if (!res || !res.ok()) throw new Error(`LinkedIn returned HTTP ${res?.status() ?? "?"}`);
-    if (page.url().includes("/authwall") || page.url().includes("/checkpoint") || page.url().includes("/login")) {
-      throw new Error(`LinkedIn requires login — session expired. Landed on: ${page.url()}`);
-    }
+  }
+  throw new Error(`LinkedIn 999/error on all ${MAX_PROXY_ATTEMPTS} proxy attempts. Last: ${lastErr}`);
+}
+
+export async function scrapeProfile(job: ScrapeJob): Promise<string> {
+  const { ctx, page } = await openProfileWithRetry(job.linkedinUrl);
+  try {
 
     // Human pause — reading the header and about section
     await sleep(randMs(TIMING.afterPageLoad));
