@@ -13,7 +13,7 @@
  * already polls. No changes needed on the app side.
  */
 
-import { newContext } from "./browser.js";
+import { newContext, markCookieSetFailed } from "./browser.js";
 import type { Page } from "playwright";
 import type { ScrapeJob } from "./queue.js";
 
@@ -132,7 +132,8 @@ export async function scrapeProfile(job: ScrapeJob): Promise<string> {
 
     console.log(`[scraper] page loaded: ${page.url().slice(0, 120)} (status ${res?.status()})`);
     if (res?.status() === 999) {
-      throw new Error("LinkedIn returned 999 — bot detection triggered. Try refreshing LINKEDIN_COOKIES from your browser.");
+      markCookieSetFailed();
+      throw new Error("LinkedIn returned 999 — cookie set flagged, rotating to next account on next job.");
     }
     if (!res || !res.ok()) throw new Error(`LinkedIn returned HTTP ${res?.status() ?? "?"}`);
     if (page.url().includes("/authwall") || page.url().includes("/checkpoint") || page.url().includes("/login")) {
