@@ -32,16 +32,30 @@ export async function loadProxies(): Promise<void> {
       const res = await fetch(listUrl, { signal: AbortSignal.timeout(10_000) });
       const text = await res.text();
       const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      const baseCreds = singleUrl ? (() => { try { return new URL(singleUrl); } catch { return null; } })() : null;
+      console.log(`[scraper] proxy list raw sample: ${lines.slice(0, 2).join(" | ")}`);
       _proxyList = lines.map(line => {
+        // Format 1: full URL  http://user:pass@ip:port
+        if (line.startsWith("http://") || line.startsWith("https://")) {
+          try {
+            const u = new URL(line);
+            return { server: `http://${u.host}`, username: u.username || undefined, password: u.password || undefined };
+          } catch { return null; }
+        }
+        // Format 2: ip:port:user:pass
         const parts = line.split(":");
         if (parts.length === 4) {
-          // ip:port:user:pass
           return { server: `http://${parts[0]}:${parts[1]}`, username: parts[2], password: parts[3] };
         }
+        // Format 3: user:pass@ip:port
+        if (line.includes("@")) {
+          const [auth, host] = line.split("@");
+          const [username, password] = auth.split(":");
+          return { server: `http://${host}`, username, password };
+        }
+        // Format 4: ip:port only — use creds from PROXY_URL
         if (parts.length === 2) {
-          // ip:port — try to get creds from PROXY_URL
-          const base = singleUrl ? (() => { try { return new URL(singleUrl); } catch { return null; } })() : null;
-          return { server: `http://${line}`, username: base?.username, password: base?.password };
+          return { server: `http://${line}`, username: baseCreds?.username, password: baseCreds?.password };
         }
         return null;
       }).filter((p): p is NonNullable<typeof p> => p !== null);
