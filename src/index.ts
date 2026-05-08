@@ -24,7 +24,7 @@ import http from "node:http";
 import { randomUUID } from "node:crypto";
 import { scrapeProfile, postResultToApp, postErrorToApp } from "./scrape.js";
 import { enqueue, getStatus, setProcessor } from "./queue.js";
-import { loginLinkedIn, setSessionCookies } from "./browser.js";
+import { loginLinkedIn, setSessionCookies, loadProxies } from "./browser.js";
 import type { ScrapeJob } from "./queue.js";
 
 const PORT    = Number(process.env.PORT ?? 3001);
@@ -48,6 +48,7 @@ setProcessor(async (job: ScrapeJob) => {
 });
 
 async function initSession(): Promise<void> {
+  await loadProxies();
   // Option 1: single li_at session cookie value — simplest, copy from DevTools
   const liAt = process.env.LINKEDIN_SESSION_COOKIE?.trim();
   if (liAt) {

@@ -18,43 +18,47 @@ const USER_AGENT =
 let _browser: Browser | null = null;
 let _sessionCookies: Cookie[] = [];
 
-// Proxy rotation — cycles through PROXY_LIST (comma-separated host:port entries)
-// using the credentials from PROXY_URL. Falls back to PROXY_URL as a single proxy.
-// Example Railway vars:
-//   PROXY_URL  = http://user:pass@31.59.20.176:6754   (first proxy, also provides credentials)
-//   PROXY_LIST = 31.59.20.176:6754,31.59.20.177:6754,31.59.20.178:6754
 let _proxyList: Array<{ server: string; username?: string; password?: string }> = [];
 let _proxyIndex = 0;
 
-function initProxies(): void {
-  const baseUrl = process.env.PROXY_URL?.trim();
-  if (!baseUrl) return;
+// Fetch proxy list from Webshare download URL.
+// Format returned: "ip:port:user:pass" per line.
+export async function loadProxies(): Promise<void> {
+  const listUrl = process.env.PROXY_LIST_URL?.trim();
+  const singleUrl = process.env.PROXY_URL?.trim();
 
-  let username: string | undefined;
-  let password: string | undefined;
-  try {
-    const parsed = new URL(baseUrl);
-    username = parsed.username || undefined;
-    password = parsed.password || undefined;
-  } catch { return; }
-
-  const listEnv = process.env.PROXY_LIST?.trim();
-  if (listEnv) {
-    _proxyList = listEnv.split(",").map(s => s.trim()).filter(Boolean).map(hostPort => ({
-      server: `http://${hostPort}`,
-      username,
-      password,
-    }));
-    console.log(`[scraper] ${_proxyList.length} proxies loaded for rotation`);
-  } else {
-    // Single proxy from PROXY_URL
+  if (listUrl) {
     try {
-      const parsed = new URL(baseUrl);
-      _proxyList = [{ server: `${parsed.protocol}//${parsed.host}`, username, password }];
-      console.log(`[scraper] 1 proxy loaded: ${parsed.host}`);
-    } catch {
-      console.warn("[scraper] invalid PROXY_URL — scraping without proxy");
+      const res = await fetch(listUrl, { signal: AbortSignal.timeout(10_000) });
+      const text = await res.text();
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      _proxyList = lines.map(line => {
+        const parts = line.split(":");
+        if (parts.length === 4) {
+          // ip:port:user:pass
+          return { server: `http://${parts[0]}:${parts[1]}`, username: parts[2], password: parts[3] };
+        }
+        if (parts.length === 2) {
+          // ip:port — try to get creds from PROXY_URL
+          const base = singleUrl ? (() => { try { return new URL(singleUrl); } catch { return null; } })() : null;
+          return { server: `http://${line}`, username: base?.username, password: base?.password };
+        }
+        return null;
+      }).filter((p): p is NonNullable<typeof p> => p !== null);
+      console.log(`[scraper] ${_proxyList.length} proxies loaded from PROXY_LIST_URL`);
+    } catch (err) {
+      console.error("[scraper] failed to fetch proxy list:", err instanceof Error ? err.message : err);
     }
+  } else if (singleUrl) {
+    try {
+      const parsed = new URL(singleUrl);
+      _proxyList = [{ server: `${parsed.protocol}//${parsed.host}`, username: parsed.username || undefined, password: parsed.password || undefined }];
+      console.log(`[scraper] 1 proxy loaded from PROXY_URL`);
+    } catch {
+      console.warn("[scraper] invalid PROXY_URL");
+    }
+  } else {
+    console.log("[scraper] no proxy configured — direct connection");
   }
 }
 
@@ -64,8 +68,6 @@ function nextProxy() {
   _proxyIndex++;
   return proxy;
 }
-
-initProxies();
 
 async function getBrowser(): Promise<Browser> {
   if (_browser && _browser.isConnected()) return _browser;
