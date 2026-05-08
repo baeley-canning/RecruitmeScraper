@@ -18,9 +18,29 @@ const USER_AGENT =
 let _browser: Browser | null = null;
 let _sessionCookies: Cookie[] = [];
 
+function getProxyConfig() {
+  const url = process.env.PROXY_URL?.trim();
+  if (!url) return undefined;
+  // Support http://user:pass@host:port or http://host:port
+  try {
+    const parsed = new URL(url);
+    return {
+      server:   `${parsed.protocol}//${parsed.host}`,
+      username: parsed.username || undefined,
+      password: parsed.password || undefined,
+    };
+  } catch {
+    console.warn("[scraper] invalid PROXY_URL — scraping without proxy");
+    return undefined;
+  }
+}
+
 async function getBrowser(): Promise<Browser> {
   if (_browser && _browser.isConnected()) return _browser;
-  _browser = await webkit.launch({ headless: true });
+  const proxy = getProxyConfig();
+  if (proxy) console.log(`[scraper] using proxy: ${proxy.server}`);
+  else        console.log("[scraper] no proxy configured — direct connection");
+  _browser = await webkit.launch({ headless: true, proxy });
   _browser.on("disconnected", () => { _browser = null; });
   return _browser;
 }
