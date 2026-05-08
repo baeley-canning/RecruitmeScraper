@@ -18,32 +18,63 @@ const USER_AGENT =
 let _browser: Browser | null = null;
 let _sessionCookies: Cookie[] = [];
 
-function getProxyConfig() {
-  const url = process.env.PROXY_URL?.trim();
-  if (!url) return undefined;
-  // Support http://user:pass@host:port or http://host:port
+// Proxy rotation — cycles through PROXY_LIST (comma-separated host:port entries)
+// using the credentials from PROXY_URL. Falls back to PROXY_URL as a single proxy.
+// Example Railway vars:
+//   PROXY_URL  = http://user:pass@31.59.20.176:6754   (first proxy, also provides credentials)
+//   PROXY_LIST = 31.59.20.176:6754,31.59.20.177:6754,31.59.20.178:6754
+let _proxyList: Array<{ server: string; username?: string; password?: string }> = [];
+let _proxyIndex = 0;
+
+function initProxies(): void {
+  const baseUrl = process.env.PROXY_URL?.trim();
+  if (!baseUrl) return;
+
+  let username: string | undefined;
+  let password: string | undefined;
   try {
-    const parsed = new URL(url);
-    return {
-      server:   `${parsed.protocol}//${parsed.host}`,
-      username: parsed.username || undefined,
-      password: parsed.password || undefined,
-    };
-  } catch {
-    console.warn("[scraper] invalid PROXY_URL — scraping without proxy");
-    return undefined;
+    const parsed = new URL(baseUrl);
+    username = parsed.username || undefined;
+    password = parsed.password || undefined;
+  } catch { return; }
+
+  const listEnv = process.env.PROXY_LIST?.trim();
+  if (listEnv) {
+    _proxyList = listEnv.split(",").map(s => s.trim()).filter(Boolean).map(hostPort => ({
+      server: `http://${hostPort}`,
+      username,
+      password,
+    }));
+    console.log(`[scraper] ${_proxyList.length} proxies loaded for rotation`);
+  } else {
+    // Single proxy from PROXY_URL
+    try {
+      const parsed = new URL(baseUrl);
+      _proxyList = [{ server: `${parsed.protocol}//${parsed.host}`, username, password }];
+      console.log(`[scraper] 1 proxy loaded: ${parsed.host}`);
+    } catch {
+      console.warn("[scraper] invalid PROXY_URL — scraping without proxy");
+    }
   }
 }
 
+function nextProxy() {
+  if (_proxyList.length === 0) return undefined;
+  const proxy = _proxyList[_proxyIndex % _proxyList.length];
+  _proxyIndex++;
+  return proxy;
+}
+
+initProxies();
+
 async function getBrowser(): Promise<Browser> {
   if (_browser && _browser.isConnected()) return _browser;
-  const proxy = getProxyConfig();
-  if (proxy) console.log(`[scraper] using proxy: ${proxy.server}`);
-  else        console.log("[scraper] no proxy configured — direct connection");
-  _browser = await webkit.launch({ headless: true, proxy });
+  // Restart browser with next proxy so each scrape job gets a different IP
+  _browser = await webkit.launch({ headless: true });
   _browser.on("disconnected", () => { _browser = null; });
   return _browser;
 }
+
 
 function makeContextOptions() {
   return {
@@ -135,7 +166,9 @@ export function setSessionCookies(cookies: Cookie[]): void {
 
 export async function newContext(): Promise<BrowserContext> {
   const browser = await getBrowser();
-  const ctx = await browser.newContext(makeContextOptions());
+  const proxy = nextProxy();
+  if (proxy) console.log(`[scraper] using proxy: ${proxy.server}`);
+  const ctx = await browser.newContext({ ...makeContextOptions(), proxy });
   if (_sessionCookies.length > 0) await ctx.addCookies(_sessionCookies);
   return ctx;
 }
