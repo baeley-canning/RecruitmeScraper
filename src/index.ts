@@ -24,7 +24,7 @@ import http from "node:http";
 import { randomUUID } from "node:crypto";
 import { scrapeProfile, postResultToApp, postErrorToApp } from "./scrape.js";
 import { enqueue, getStatus, setProcessor } from "./queue.js";
-import { loginLinkedIn, setSessionCookies, addCookieSet } from "./browser.js";
+import { loginLinkedIn, setSessionCookies } from "./browser.js";
 import type { ScrapeJob } from "./queue.js";
 
 const PORT    = Number(process.env.PORT ?? 3001);
@@ -61,37 +61,7 @@ async function initSession(): Promise<void> {
     return;
   }
 
-  // Option 2a: multiple cookie sets — LINKEDIN_COOKIES, LINKEDIN_COOKIES_2, LINKEDIN_COOKIES_3 etc.
-  // Each is a full Cookie-Editor JSON export from a different LinkedIn account.
-  // The scraper rotates round-robin and skips accounts that get 999-blocked.
-  let cookieSetsLoaded = 0;
-  for (let i = 1; i <= 10; i++) {
-    const key = i === 1 ? "LINKEDIN_COOKIES" : `LINKEDIN_COOKIES_${i}`;
-    const val = process.env[key];
-    if (!val) { if (i > 1) break; continue; }
-    try {
-      const raw = JSON.parse(val) as Record<string, unknown>[];
-      const sameSiteMap: Record<string, "None" | "Lax" | "Strict"> = {
-        no_restriction: "None", none: "None", lax: "Lax", strict: "Strict",
-      };
-      const sanitized = raw.map((c) => {
-        const raw_ss = (c.sameSite as string | null)?.toLowerCase() ?? "";
-        const sameSite: "None" | "Lax" | "Strict" = sameSiteMap[raw_ss] ?? "Lax";
-        const expires = c.expires ?? (c.expirationDate ? Math.floor(c.expirationDate as number) : -1);
-        return { name: c.name, value: c.value, domain: c.domain, path: c.path ?? "/",
-          httpOnly: c.httpOnly ?? false, secure: c.secure ?? true, sameSite, expires };
-      });
-      addCookieSet(sanitized as Parameters<typeof addCookieSet>[0]);
-      cookieSetsLoaded++;
-      console.log(`[scraper] cookie set ${cookieSetsLoaded} loaded from ${key}`);
-    } catch (e) { console.warn(`[scraper] failed to parse ${key}:`, e); }
-  }
-  if (cookieSetsLoaded > 0) {
-    console.log(`[scraper] ${cookieSetsLoaded} LinkedIn account(s) ready for rotation`);
-    return;
-  }
-
-  // Option 2b: full JSON cookie export (e.g. from Cookie-Editor extension)
+  // Option 2: full JSON cookie export from Cookie-Editor extension
   const cookieJson = process.env.LINKEDIN_COOKIES;
   if (cookieJson) {
     try {

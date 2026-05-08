@@ -16,42 +16,6 @@ const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
 
 let _browser: Browser | null = null;
-
-// Cookie rotation — multiple LinkedIn accounts spread the load so no single
-// account gets flagged. Add accounts via LINKEDIN_COOKIES_2, LINKEDIN_COOKIES_3 etc.
-// The scraper rotates round-robin and skips accounts that hit 999.
-let _cookieSets: Cookie[][] = [];
-let _cookieIndex = 0;
-let _failedIndexes = new Set<number>();
-
-export function addCookieSet(cookies: Cookie[]): void {
-  _cookieSets.push(cookies);
-}
-
-export function getNextCookieSet(): Cookie[] {
-  if (_cookieSets.length === 0) return [];
-  // Find next non-failed index
-  for (let i = 0; i < _cookieSets.length; i++) {
-    const idx = (_cookieIndex + i) % _cookieSets.length;
-    if (!_failedIndexes.has(idx)) {
-      _cookieIndex = (idx + 1) % _cookieSets.length;
-      return _cookieSets[idx];
-    }
-  }
-  // All failed — reset and try again
-  console.warn("[scraper] all cookie sets have failed — resetting failure state");
-  _failedIndexes.clear();
-  _cookieIndex = 0;
-  return _cookieSets[0] ?? [];
-}
-
-export function markCookieSetFailed(): void {
-  const failedIdx = (_cookieIndex - 1 + _cookieSets.length) % _cookieSets.length;
-  _failedIndexes.add(failedIdx);
-  console.warn(`[scraper] cookie set ${failedIdx + 1} marked as failed (${_cookieSets.length - _failedIndexes.size} remaining)`);
-}
-
-// Legacy single-set support
 let _sessionCookies: Cookie[] = [];
 
 async function getBrowser(): Promise<Browser> {
@@ -174,9 +138,7 @@ export function setSessionCookies(cookies: Cookie[]): void {
 export async function newContext(): Promise<BrowserContext> {
   const browser = await getBrowser();
   const ctx = await browser.newContext(makeContextOptions());
-  // Prefer rotation pool; fall back to legacy single set
-  const cookies = _cookieSets.length > 0 ? getNextCookieSet() : _sessionCookies;
-  if (cookies.length > 0) await ctx.addCookies(cookies);
+  if (_sessionCookies.length > 0) await ctx.addCookies(_sessionCookies);
   return ctx;
 }
 
